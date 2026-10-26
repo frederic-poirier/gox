@@ -1,0 +1,51 @@
+package views
+
+// Line comment with fake JSX: return <h1>nope</h1>
+
+/*
+Block comment with fake JSX:
+return <div class="x">nope</div>
+*/
+
+func Hello(name string) Node {
+	return (
+		<div class="box">
+			<h1>Hi {name}</h1>
+			<Footer year={2026} />
+		</div>
+	)
+}
+
+func Footer(year int) Node {
+	return <footer>{year}</footer>
+}
+
+func SelfClosing() Node {
+	return <hr />
+}
+
+func Nested(show bool) Node {
+	return (
+		<section>
+			{name}
+			<span class={"btn"} data-x="1">ok</span>
+		</section>
+	)
+}
+
+func NotJSX(a, b int) bool {
+	// real Go less-than — scanner still emits <
+	return a < b
+}
+
+func Strings() string {
+	s := "<div>not jsx</div>"
+	raw := `return <h1>also not jsx</h1>`
+	r := '<'
+	_ = r
+	return s + raw
+}
+
+func plain() string {
+	return "ok"
+}
