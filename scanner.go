@@ -1,122 +1,113 @@
 package main
 
-import (
-	"fmt"
-	"go/scanner"
-	"go/token"
-	"os"
-)
+import "strings"
 
-type (
-	returnContent []string
-	returnKind    int
-)
+type state int
 
 const (
-	returnKindBlock returnKind = iota
-	returnKindInline
-	returnKindEmpty
+	InRegularCode state = iota
+	InBlockComment
+	InInlineComment
+	InBackticksString
+	InDoubleQuotedString
+	InRune
 )
 
-func main() {
-	exempleFilePath := "./examples/play.gox"
-	content, err := os.ReadFile(exempleFilePath)
-	if err != nil {
-		fmt.Println("Could not read the file content")
-		os.Exit(1)
+var (
+	BackSlash   byte = '\\'
+	Slash       byte = '/'
+	Asterik     byte = '*'
+	Space       byte = ' '
+	DoubleQuote byte = '"'
+	SingleQuote byte = '\''
+	BackTick    byte = '`'
+	LineBreak   byte = '\n'
+)
+
+func isIdentChar(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '_'
+}
+
+func isFollowedByReturn(content string, i int) bool {
+	// si pas précédé de vide ou un ident char, il n'est pas followed.
+	if i > 0 && isIdentChar(content[i-1]) {
+		return false
+	}
+	// si pas suivit de return il ne l'est pas followed
+	if !strings.HasPrefix(content[i:], "return") {
+		return false
+	}
+	// si le return est suivit d'assez de caractère
+	// et que celui-ci n'est pas ident il est followed.
+	if len(content) > i+6 && isIdentChar(content[i+6]) {
+		return false
 	}
 
-	var s scanner.Scanner
-	fset := token.NewFileSet()
-	file := fset.AddFile("play", fset.Base(), len(content))
-	s.Init(file, content, nil, scanner.ScanComments)
+	return true
+}
 
-	returns := make(returnContent, 1)
-	isFollowingReturnStatement := false
-	kind := returnKindEmpty
-	lparenCount := 0
-	for {
+func findReturns(content string) (position int, found bool) {
+	state := InRegularCode
 
-		_, tok, lit := s.Scan()
-		if tok == token.EOF {
-			break
-		}
-
-		if tok == token.COMMENT || tok == token.PACKAGE {
-			continue
-		}
-
-		if tok == token.RETURN {
-			isFollowingReturnStatement = true
-			continue
-		}
-
-		// if inside an inline return and you encounter something else
-		// then semicolon, append it to the return content, otherwise we
-		// are out of the return content.
-		if kind == returnKindInline {
-			if tok != token.SEMICOLON {
-				if lit == "" {
-					returns[len(returns)-1] += tok.String()
-				} else {
-					returns[len(returns)-1] += lit
-				}
-			} else {
-				kind = returnKindEmpty
+	for i := 0; i < len(content); i++ {
+		switch state {
+		case InBlockComment:
+			if i+1 < len(content) && content[i] == Asterik && content[i+1] == Slash {
+				state = InRegularCode
+				i++
 			}
-		}
-
-		// if inside a return block and you encounter a left parenthesis
-		// add it to the count of nested parenthese.
-		// each time you encounter a right parenthese if there is no nesting, it is
-		// the end of the return statement, else decrease the nesting.
-		if kind == returnKindBlock {
-			if tok == token.SEMICOLON {
+		case InInlineComment:
+			if content[i] == LineBreak {
+				state = InRegularCode
+			}
+		case InRune:
+			if content[i] == BackSlash {
+				i++
 				continue
 			}
-
-			if tok == token.LPAREN {
-				lparenCount++
+			if content[i] == SingleQuote {
+				state = InRegularCode
 			}
-
-			if tok == token.RPAREN {
-				if lparenCount == 0 {
-					kind = returnKindEmpty
-				} else {
-					lparenCount--
-				}
-			}
-
-			if lit == "" {
-				returns[len(returns)-1] += tok.String()
-			} else {
-				returns[len(returns)-1] += lit
-			}
-		}
-
-		// if is after return, is it block or inline.
-		// set after return to false
-		// if not empty add a new return string.
-		if isFollowingReturnStatement {
-			isFollowingReturnStatement = false
-			if tok == token.LPAREN {
-				kind = returnKindBlock
-			} else if tok != token.GTR {
-				kind = returnKindInline
-			} else {
-				kind = returnKindEmpty
+		case InDoubleQuotedString:
+			if content[i] == BackSlash {
+				i++
 				continue
 			}
+			if content[i] == DoubleQuote {
+				state = InRegularCode
+			}
+		case InBackticksString:
+			if content[i] == BackTick {
+				state = InRegularCode
+			}
+		case InRegularCode:
+			if isFollowedByReturn(content, i) {
+				return i + 6, true
+			}
 
-			if lit == "" {
-				returns = append(returns, tok.String())
-			} else {
-				returns = append(returns, lit)
+			switch content[i] {
+			case Slash:
+				if len(content) <= i+1 {
+					break
+				}
+
+				if content[i+1] == Asterik {
+					state = InBlockComment
+					i++
+				} else if content[i+1] == Slash {
+					state = InInlineComment
+					i++
+				}
+
+			case DoubleQuote:
+				state = InDoubleQuotedString
+			case SingleQuote:
+				state = InRune
+			case BackTick:
+				state = InBackticksString
 			}
 		}
 	}
 
-	for i := range returns {
-		fmt.Println(returns[i])
-	}
+	return position, found
 }
