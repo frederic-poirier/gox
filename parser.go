@@ -6,31 +6,34 @@ import (
 	"strings"
 )
 
-type NodeKind int
+type Node interface{ isNode() }
+type AttrValue interface{ isAttrValue() }
 
-type ParseResult struct {
-	isXML bool
-	Node  *Node
-	End   int
+type Expression string
+type Text string
+
+func (Expression) isAttrValue() {}
+func (Text) isAttrValue()       {}
+
+func (Element) isNode()    {}
+func (Expression) isNode() {}
+func (Text) isNode()       {}
+
+type Element struct {
+	tag      string
+	attrs    []Attr
+	children []Node
 }
-
-const (
-	KindElement NodeKind = iota // ex: <div>...</div>
-	KindText                    // ex: "Hello "
-	KindExpr                    // ex: {name}
-)
 
 type Attr struct {
 	Name  string
-	Value string // ex: `"box"` ou `{2026}`
+	Value AttrValue
 }
 
-type Node struct {
-	Kind     NodeKind
-	Tag      string
-	Attrs    []Attr
-	Text     string // utilisé pour KindText et KindExpr
-	Children []*Node
+type ParseResult struct {
+	isXML bool
+	Node  Node
+	End   int
 }
 
 func isLetter(b byte) bool {
@@ -107,26 +110,25 @@ func (p *Parser) peek(prefix string) bool {
 
 func (p *Parser) expect(prefix string) error {
 	if !p.peek(prefix) {
-		return errors.New(fmt.Sprintf("wanted %v at %d", prefix, p.index))
+		return fmt.Errorf("wanted %v at %d", prefix, p.index)
 	}
 	p.index += len(prefix)
 	return nil
 }
 
-func (p *Parser) element() (*Node, error) {
+func (p *Parser) element() (Element, error) {
 	p.expect("<")
-	node := &Node{}
+	element := Element{}
 	p.skipWhitespace()
 
-	nodeAttrs := make([]Attr, 0)
-	nodeTag, err := p.name()
+	attrs := make([]Attr, 0)
+	tag, err := p.name()
 	if err != nil {
-		return nil, err
+		return element, err
 	}
 
-	node.Kind = KindElement
-	node.Tag = nodeTag
-	node.Attrs = nodeAttrs
+	element.tag = tag
+	element.attrs = attrs
 
 	for {
 		p.skipWhitespace()
@@ -135,7 +137,7 @@ func (p *Parser) element() (*Node, error) {
 		// on return car aucun enfant.
 		if p.peek("/>") {
 			p.index += 2
-			return node, nil
+			return element, nil
 		}
 
 		// fin du node
@@ -150,12 +152,12 @@ func (p *Parser) element() (*Node, error) {
 		// ou d'une expression.
 		key, err := p.name()
 		if err != nil {
-			return nil, err
+			return element, err
 		}
 
 		p.skipWhitespace()
 		if err = p.expect("="); err != nil {
-			return nil, err
+			return element, err
 		}
 
 		p.skipWhitespace()
@@ -164,59 +166,76 @@ func (p *Parser) element() (*Node, error) {
 		switch {
 		case p.peek("\""):
 			value, err = p.delimited('"', '"')
+			if err != nil {
+				return element, err
+			}
+
+			element.attrs = append(element.attrs, Attr{
+				Name:  key,
+				Value: Text(value),
+			})
 		case p.peek("'"):
 			value, err = p.delimited('\'', '\'')
+			if err != nil {
+				return element, err
+			}
+
+			element.attrs = append(element.attrs, Attr{
+				Name:  key,
+				Value: Text(value),
+			})
 		case p.peek("{"):
 			value, err = p.delimited('{', '}')
+			if err != nil {
+				return element, err
+			}
+
+			element.attrs = append(element.attrs, Attr{
+				Name:  key,
+				Value: Expression(value),
+			})
 		default:
-			return nil, fmt.Errorf("valeur d'attribut attendue à la position %d", p.index)
+			return element, fmt.Errorf("valeur d'attribut attendue à la position %d", p.index)
 		}
-
-		if err != nil {
-			return nil, err
-		}
-
-		// il faudrait probablement faire quelque chose pour les empty value.
-		node.Attrs = append(node.Attrs, Attr{Name: key, Value: value})
 		p.index++
 	}
 
-	children := make([]*Node, 0)
+	children := make([]Node, 0)
 	for !p.peek("</") {
 		if p.index >= len(p.content) {
-			return nil, errors.New("balise fermante manquante")
+			return element, errors.New("balise fermante manquante")
 		}
 		switch {
 		case p.peek("<"):
 			child, err := p.element()
 			if err != nil {
-				return nil, err
+				return element, err
 			}
 			children = append(children, child)
 		case p.peek("{"):
 			expr, err := p.delimited('{', '}')
 			if err != nil {
-				return nil, err
+				return element, err
 			}
-			children = append(children, &Node{Kind: KindExpr, Text: expr})
+			children = append(children, Expression(expr))
 		default:
 			text := p.takeWhile(func(b byte) bool { return b != '<' && b != '{' })
-			children = append(children, &Node{Kind: KindText, Text: text})
+			children = append(children, Text(text))
 		}
 	}
 
 	p.index += 2
-	if name, err := p.name(); name != nodeTag || err != nil {
-		return nil, errors.New(fmt.Sprintf("closing tag does not match the opening <%v>", nodeTag))
+	if name, err := p.name(); name != tag || err != nil {
+		return element, fmt.Errorf("closing tag does not match the opening <%v>", tag)
 	}
 
 	p.skipWhitespace()
 	if err = p.expect(">"); err != nil {
-		return nil, err
+		return element, err
 	}
 
-	node.Children = children
-	return node, nil
+	element.children = children
+	return element, nil
 }
 
 func (p *Parser) startsElement() bool {
@@ -252,4 +271,20 @@ func parse(content string) (ParseResult, error) {
 	}
 
 	return ParseResult{isXML: true, Node: root, End: p.index}, nil
+}
+
+func (e Element) String() string {
+	return fmt.Sprintf("Element(tag=%q, attrs=%v, children=%v)", e.tag, e.attrs, e.children)
+}
+
+func (e Expression) String() string {
+	return fmt.Sprintf("Expression(%q)", string(e))
+}
+
+func (t Text) String() string {
+	return fmt.Sprintf("Text(%q)", string(t))
+}
+
+func (a Attr) String() string {
+	return fmt.Sprintf("Attr(Name=%+q, Value=%v)", a.Name, a.Value)
 }

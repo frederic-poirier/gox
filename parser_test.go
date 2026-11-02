@@ -11,7 +11,7 @@ type ParseJSXReturnTest struct {
 	wantJSX bool
 	wantEnd int
 	wantErr bool
-	wantAST *Node
+	wantAST Node
 }
 
 var parseJSXReturnTests = []ParseJSXReturnTest{
@@ -58,21 +58,17 @@ var parseJSXReturnTests = []ParseJSXReturnTest{
 		in:      " <hr />\n}",
 		wantJSX: true,
 		wantEnd: 7, // len(" <hr />")
-		wantAST: &Node{
-			Kind: KindElement,
-			Tag:  "hr",
-		},
+		wantAST: Element{tag: "hr"},
 	},
 	{
 		name:    "simple inline element with text",
 		in:      " <h1>Hello</h1>\n}",
 		wantJSX: true,
 		wantEnd: 15, // len(" <h1>Hello</h1>")
-		wantAST: &Node{
-			Kind: KindElement,
-			Tag:  "h1",
-			Children: []*Node{
-				{Kind: KindText, Text: "Hello"},
+		wantAST: Element{
+			tag: "h1",
+			children: []Node{
+				Text("Hello"),
 			},
 		},
 	},
@@ -81,12 +77,11 @@ var parseJSXReturnTests = []ParseJSXReturnTest{
 		in:      ` <Footer class="box" year={2026} />`,
 		wantJSX: true,
 		wantEnd: 35,
-		wantAST: &Node{
-			Kind: KindElement,
-			Tag:  "Footer",
-			Attrs: []Attr{
-				{Name: "class", Value: `"box"`},
-				{Name: "year", Value: `{2026}`},
+		wantAST: Element{
+			tag: "Footer",
+			attrs: []Attr{
+				{Name: "class", Value: Text("box")},
+				{Name: "year", Value: Expression("2026")},
 			},
 		},
 	},
@@ -95,12 +90,11 @@ var parseJSXReturnTests = []ParseJSXReturnTest{
 		in:      " <div>Hi {name}</div>",
 		wantJSX: true,
 		wantEnd: 21,
-		wantAST: &Node{
-			Kind: KindElement,
-			Tag:  "div",
-			Children: []*Node{
-				{Kind: KindText, Text: "Hi "},
-				{Kind: KindExpr, Text: "name"},
+		wantAST: Element{
+			tag: "div",
+			children: []Node{
+				Text("Hi "),
+				Expression("name"),
 			},
 		},
 	},
@@ -115,19 +109,16 @@ var parseJSXReturnTests = []ParseJSXReturnTest{
 }`,
 		wantJSX: true,
 		wantEnd: 64, // s'arrête juste après la parenthèse fermante ')'
-		wantAST: &Node{
-			Kind:  KindElement,
-			Tag:   "div",
-			Attrs: []Attr{{Name: "class", Value: `"box"`}},
-			Children: []*Node{
-				{
-					Kind:     KindElement,
-					Tag:      "h1",
-					Children: []*Node{{Kind: KindExpr, Text: "title"}},
+		wantAST: Element{
+			tag:   "div",
+			attrs: []Attr{{Name: "class", Value: Text("box")}},
+			children: []Node{
+				Element{
+					tag:      "h1",
+					children: []Node{Expression("title")},
 				},
-				{
-					Kind: KindElement,
-					Tag:  "hr",
+				Element{
+					tag: "hr",
 				},
 			},
 		},
@@ -139,11 +130,43 @@ var parseJSXReturnTests = []ParseJSXReturnTest{
 		in:      " <p>C'est http://example.com</p>\n\tcase 3:",
 		wantJSX: true,
 		wantEnd: 32, // s'arrête pile après </p>
-		wantAST: &Node{
-			Kind: KindElement,
-			Tag:  "p",
-			Children: []*Node{
-				{Kind: KindText, Text: "C'est http://example.com"},
+		wantAST: Element{
+			tag: "p",
+			children: []Node{
+				Text("C'est http://example.com"),
+			},
+		},
+	},
+	{
+		name:    "closing tag inside go string expression",
+		in:      ` <div>{fmt.Sprintf("</div> }")}</div>}`,
+		wantJSX: true,
+		wantEnd: 64, // s'arrête juste après la parenthèse fermante ')'
+		wantAST: Element{
+			tag:   "div",
+			attrs: []Attr{{Name: "class", Value: Text("box")}},
+			children: []Node{
+				Element{
+					tag:      "h1",
+					children: []Node{Expression("title")},
+				},
+				Element{
+					tag: "hr",
+				},
+			},
+		},
+	},
+
+	// --- 3. Cas piégés dans le JSX (apostrophes, URLs, accolades imbriquées) ---
+	{
+		name:    "apostrophe and url in text",
+		in:      " <p>C'est http://example.com</p>\n\tcase 3:",
+		wantJSX: true,
+		wantEnd: 32, // s'arrête pile après </p>
+		wantAST: Element{
+			tag: "p",
+			children: []Node{
+				Text("C'est http://example.com"),
 			},
 		},
 	},
@@ -152,11 +175,10 @@ var parseJSXReturnTests = []ParseJSXReturnTest{
 		in:      ` <div>{fmt.Sprintf("</div> }")}</div>}`,
 		wantJSX: true,
 		wantEnd: 37, // s'arrête après le vrai </div>, sans compter le '}' final de la func Go
-		wantAST: &Node{
-			Kind: KindElement,
-			Tag:  "div",
-			Children: []*Node{
-				{Kind: KindExpr, Text: `fmt.Sprintf("</div> }")`},
+		wantAST: Element{
+			tag: "div",
+			children: []Node{
+				Expression(`fmt.Sprintf("</div> }")`),
 			},
 		},
 	},
@@ -186,12 +208,9 @@ func TestParseJSXReturn(t *testing.T) {
 	for _, tt := range parseJSXReturnTests {
 		t.Run(tt.name, func(t *testing.T) {
 			result, err := parse(tt.in)
-			isJSX := result.isXML
-			endPos := result.End
-			node := result.Node
 
-			if isJSX != tt.wantJSX {
-				t.Fatalf("isJSX = %v, want %v", isJSX, tt.wantJSX)
+			if result.isXML != tt.wantJSX {
+				t.Fatalf("isJSX = %v, want %v", result.isXML, tt.wantJSX)
 			}
 
 			if !tt.wantJSX {
@@ -203,11 +222,12 @@ func TestParseJSXReturn(t *testing.T) {
 			if tt.wantErr {
 				return
 			}
-			if endPos != tt.wantEnd {
-				t.Errorf("endPos = %d (%q), want %d (%q)", endPos, tt.in[:endPos], tt.wantEnd, tt.in[:tt.wantEnd])
+			if result.End != tt.wantEnd {
+				t.Errorf("endPos = %d (%q), want %d (%q)", result.End, tt.in[:result.End], tt.wantEnd, tt.in[:tt.wantEnd])
 			}
-			if !reflect.DeepEqual(node, tt.wantAST) {
-				t.Errorf("AST mismatch:\ngot:  %+v\nwant: %+v", node, tt.wantAST)
+
+			if !reflect.DeepEqual(result.Node, tt.wantAST) {
+				t.Errorf("AST mismatch:\ngot:  %+v\nwant: %+v", result.Node, tt.wantAST)
 			}
 		})
 	}
